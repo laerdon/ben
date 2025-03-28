@@ -1,4 +1,4 @@
-# Notion Personal Assistant
+# ben
 
 A local assistant that uses the Notion API and a locally hosted LLM (via Ollama) to read and remember information from your Notion pages.
 
