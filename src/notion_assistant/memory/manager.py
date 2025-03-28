@@ -114,6 +114,98 @@ class MemoryManager:
 
         return entry_id
 
+    def update_entry(self, entry_id: str, new_text: str) -> bool:
+        """Update an existing entry with new text."""
+        try:
+            # Generate new embedding
+            new_embedding = self._generate_embedding(new_text)
+
+            # Get current metadata (we need to preserve the date)
+            current_data = self.collection.get(ids=[entry_id])
+
+            if not current_data["ids"]:
+                return False  # Entry not found
+
+            metadata = current_data["metadatas"][0]
+
+            # Update the entry
+            self.collection.update(
+                ids=[entry_id],
+                embeddings=[new_embedding],
+                documents=[new_text],
+                metadatas=[metadata],
+            )
+
+            return True
+        except Exception as e:
+            print(f"Error updating entry {entry_id}: {e}")
+            return False
+
+    def add_entry_for_date(self, date_str: str, text: str) -> str:
+        """Add a new entry for a specific date."""
+        try:
+            # Parse the date string to datetime
+            date = datetime.strptime(date_str, "%Y-%m-%d")
+
+            # Create a LogEntry
+            entry = LogEntry(
+                date=date,
+                blocks=[],  # No blocks for manually added entries
+                raw_text=text,
+            )
+
+            # Store the entry
+            return self.store_entry(entry)
+        except Exception as e:
+            print(f"Error adding entry for date {date_str}: {e}")
+            return ""
+
+    def delete_entry(self, entry_id: str) -> bool:
+        """Delete an entry by ID."""
+        try:
+            # Check if entry exists
+            results = self.collection.get(ids=[entry_id])
+            if not results["ids"]:
+                return False
+
+            # Delete the entry
+            self.collection.delete(ids=[entry_id])
+            return True
+        except Exception as e:
+            print(f"Error deleting entry {entry_id}: {e}")
+            return False
+
+    def get_all_entries(self, limit: int = 100) -> List[LogEntry]:
+        """Get all entries in the collection, up to a limit."""
+        try:
+            # Get all entries from the collection
+            results = self.collection.get(limit=limit)
+
+            entries = []
+            for i in range(len(results["ids"])):
+                entry_id = results["ids"][i]
+                raw_text = results["documents"][i]
+                metadata = results["metadatas"][i]
+
+                # Parse date from metadata
+                date = datetime.fromisoformat(metadata["date"])
+
+                # Create LogEntry object
+                entry = LogEntry(
+                    id=entry_id,
+                    date=date,
+                    blocks=[],  # We don't store blocks in Chroma
+                    raw_text=raw_text,
+                )
+                entries.append(entry)
+
+            # Sort by date (newest first)
+            entries.sort(key=lambda x: x.date, reverse=True)
+            return entries
+        except Exception as e:
+            print(f"Error retrieving entries: {e}")
+            return []
+
     def search(self, query: str, top_k: int = 5) -> List[SearchResult]:
         """Search for entries using query and apply recency bias."""
         # Generate query embedding
@@ -148,6 +240,7 @@ class MemoryManager:
                         date=entry_date,
                         blocks=[],  # We don't store blocks in Chroma
                         raw_text=results["documents"][0][i],
+                        id=entry_id,  # Include the entry ID
                     ),
                     similarity_score=normalized_similarity,
                     final_score=final_score,

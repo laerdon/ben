@@ -10,6 +10,7 @@ class LogEntry(BaseModel):
     raw_text: Optional[str] = None
     summary: Optional[str] = None
     importance: float = 0.5  # Default importance score
+    id: Optional[str] = None  # Add ID field
 
 
 class MemoryEntry(BaseModel):

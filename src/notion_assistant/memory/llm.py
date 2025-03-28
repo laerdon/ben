@@ -4,7 +4,7 @@ from typing import Tuple
 
 class OllamaClient:
     def __init__(
-        self, model: str = "mistral", base_url: str = "http://localhost:11434"
+        self, model: str = "llama3.1:latest", base_url: str = "http://localhost:11434"
     ):
         self.model = model
         self.base_url = base_url
