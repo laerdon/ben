@@ -7,7 +7,7 @@ from .llm import OllamaClient
 
 
 class InsightGenerator:
-    def __init__(self, model: str = "mistral"):
+    def __init__(self, model: str = "llama3.1"):
         self.llm = OllamaClient(model=model)
         self.insights_dir = Path.home() / "notion_assistant_data" / "insights"
         self.insights_dir.mkdir(parents=True, exist_ok=True)

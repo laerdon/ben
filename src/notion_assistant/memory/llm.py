@@ -1,22 +1,63 @@
 import requests
-from typing import Tuple
+from typing import Tuple, Generator, Optional, Callable
 
 
 class OllamaClient:
     def __init__(
-        self, model: str = "llama3.1:latest", base_url: str = "http://localhost:11434"
+        self, model: str = "llama3.1", base_url: str = "http://localhost:11434"
     ):
         self.model = model
         self.base_url = base_url
 
     def _generate(self, prompt: str) -> str:
-        """Generate text using Ollama."""
+        """Generate text using Ollama (non-streaming)."""
         response = requests.post(
             f"{self.base_url}/api/generate",
             json={"model": self.model, "prompt": prompt, "stream": False},
         )
         response.raise_for_status()
         return response.json()["response"]
+
+    def _generate_stream(
+        self, prompt: str, callback: Optional[Callable[[str], None]] = None
+    ) -> str:
+        """
+        Generate text using Ollama with streaming.
+
+        Args:
+            prompt: The prompt to send to Ollama
+            callback: Optional callback function that receives each chunk of text
+
+        Returns:
+            The complete generated text
+        """
+        response = requests.post(
+            f"{self.base_url}/api/generate",
+            json={"model": self.model, "prompt": prompt, "stream": True},
+            stream=True,
+        )
+        response.raise_for_status()
+
+        full_response = ""
+        for line in response.iter_lines():
+            if not line:
+                continue
+
+            # Parse the JSON from each line
+            try:
+                chunk_data = requests.utils.json.loads(line)
+                if "response" in chunk_data:
+                    chunk = chunk_data["response"]
+                    full_response += chunk
+
+                    # Call the callback with the new chunk if provided
+                    if callback:
+                        callback(chunk)
+            except Exception as e:
+                # Skip any lines that don't parse correctly
+                pass
+
+        return full_response
 
     def analyze_entry(self, text: str, date: str) -> Tuple[str, float]:
         """Analyze a log entry to generate a summary and importance score."""

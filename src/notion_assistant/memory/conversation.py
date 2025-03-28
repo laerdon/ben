@@ -1,10 +1,11 @@
-from typing import List, Dict, Optional, Tuple, Set
+from typing import List, Dict, Optional, Tuple, Set, Callable
 import json
 import random
 from datetime import datetime
 from .manager import MemoryManager
 from .insights import InsightGenerator
 from .llm import OllamaClient
+from .intent import IntentRecognizer, IntentType
 import requests
 
 
@@ -13,19 +14,34 @@ class ConversationManager:
         self.memory_manager = MemoryManager()
         self.insight_generator = InsightGenerator()
         self.llm = OllamaClient(model=model)
+        self.intent_recognizer = IntentRecognizer(model=model)
         self.conversation_history = []
         self.debug = debug
 
-    def chat(self, user_message: str) -> str:
-        """Process a user message and generate a response using memory and insights."""
+    def chat(
+        self, user_message: str, stream_callback: Optional[Callable[[str], None]] = None
+    ) -> str:
+        """
+        Process a user message and generate a response using memory and insights.
+
+        Args:
+            user_message: The user's message to process
+            stream_callback: Optional callback function to receive streaming output chunks
+
+        Returns:
+            The complete response
+        """
         # Add user message to history
         self.conversation_history.append({"role": "user", "content": user_message})
 
         try:
-            # Evaluate the purpose of the interaction
-            behaviors, modified_message = self._evaluate_interaction_purpose(
-                user_message
+            # Recognize intent using the new intent recognition system
+            intent_result = self.intent_recognizer.recognize_intent(
+                user_message, self.conversation_history
             )
+
+            # Map recognized intents to behaviors
+            behaviors = self._map_intents_to_behaviors(intent_result)
 
             # Apply memory operations based on behaviors
             if "memory_loss" in behaviors:
@@ -34,26 +50,56 @@ class ConversationManager:
             # Search memory for relevant entries (if retrieval is needed)
             memory_results = []
             if "retrieval" in behaviors:
-                memory_results = self.memory_manager.search(modified_message, top_k=3)
+                memory_results = self.memory_manager.search(user_message, top_k=3)
 
             # Load latest insights
             insights = self.insight_generator.load_latest_insights()
 
             # Build context for LLM
-            context = self._build_context(modified_message, memory_results, insights)
+            context = self._build_context(user_message, memory_results, insights)
 
-            # Generate response
-            response = self._generate_response(context, behaviors)
+            # Generate response - use streaming if callback is provided
+            if stream_callback:
+                response = self._generate_response_stream(
+                    context, behaviors, stream_callback
+                )
+            else:
+                response = self._generate_response(context, behaviors)
 
             # Apply memory gain if needed
             if "memory_gain" in behaviors:
                 self._apply_memory_gain(user_message, response)
 
-            # Add behavior information to response for debugging
-            behavior_info = (
-                f"\n\n[behaviors: {', '.join(behaviors)}]" if self.debug else ""
-            )
-            full_response = response + behavior_info
+            # Add behavior and intent information to response for debugging
+            debug_info = ""
+            if self.debug:
+                # Add behaviors
+                debug_info += f"\n\n[behaviors: {', '.join(behaviors)}]"
+
+                # Add intent information
+                debug_info += f"\n[primary intent: {intent_result.primary_intent.name} ({intent_result.confidence:.2f})]"
+                if intent_result.secondary_intents:
+                    secondary = ", ".join(
+                        [i.name for i in intent_result.secondary_intents]
+                    )
+                    debug_info += f"\n[secondary intents: {secondary}]"
+
+                # Add confidence breakdown if available
+                if (
+                    intent_result.metadata
+                    and "confidence_breakdown" in intent_result.metadata
+                ):
+                    breakdown = ", ".join(
+                        [
+                            f"{intent}: {conf:.2f}"
+                            for intent, conf in intent_result.metadata[
+                                "confidence_breakdown"
+                            ].items()
+                        ]
+                    )
+                    debug_info += f"\n[confidence: {breakdown}]"
+
+            full_response = response + debug_info
 
             # Add assistant response to history
             self.conversation_history.append({"role": "assistant", "content": response})
@@ -72,14 +118,40 @@ class ConversationManager:
             )
             return error_msg
 
+    def _map_intents_to_behaviors(self, intent_result) -> Set[str]:
+        """Map the recognized intents to behavior flags."""
+        behaviors = {"default"}
+
+        # Map primary intent
+        if intent_result.primary_intent == IntentType.RETRIEVAL:
+            behaviors.add("retrieval")
+        elif intent_result.primary_intent == IntentType.MEMORY_GAIN:
+            behaviors.add("memory_gain")
+        elif intent_result.primary_intent == IntentType.MEMORY_LOSS:
+            behaviors.add("memory_loss")
+        elif intent_result.primary_intent == IntentType.QUESTION:
+            behaviors.add("retrieval")  # Questions typically need retrieval
+
+        # Consider secondary intents too
+        for intent in intent_result.secondary_intents:
+            if intent == IntentType.RETRIEVAL:
+                behaviors.add("retrieval")
+            elif intent == IntentType.MEMORY_GAIN:
+                behaviors.add("memory_gain")
+            elif intent == IntentType.MEMORY_LOSS:
+                behaviors.add("memory_loss")
+
+        # Consider entities
+        for entity in intent_result.entities:
+            if entity.type.name == "IMPORTANCE" and entity.confidence > 0.6:
+                behaviors.add("memory_gain")  # Important things should be remembered
+
+        return behaviors
+
     def _evaluate_interaction_purpose(self, message: str) -> Tuple[Set[str], str]:
         """
-        Evaluate the purpose of the interaction and determine which behaviors to apply.
-
-        Returns:
-            Tuple containing:
-            - Set of behavior types ("default", "retrieval", "memory_loss", "memory_gain")
-            - Modified message (if needed for processing)
+        DEPRECATED: Use intent_recognizer instead.
+        This method is kept for backward compatibility.
         """
         # Start with default behavior
         behaviors = {"default"}
@@ -149,7 +221,10 @@ class ConversationManager:
         return behaviors, modified_message
 
     def _get_llm_behavior_evaluation(self, message: str) -> Set[str]:
-        """Use the LLM to evaluate complex messages for behavior determination."""
+        """
+        DEPRECATED: Use intent_recognizer instead.
+        This method is kept for backward compatibility.
+        """
         prompt = f"""
         Analyze this user message and determine which behaviors should be applied:
         
@@ -311,6 +386,68 @@ be helpful and informative.
             print("--- END DEBUG PROMPT ---\n")
 
         response = self.llm._generate(prompt)
+
+        # Print response for debugging if enabled
+        if self.debug:
+            print("\n--- DEBUG: RAW MODEL RESPONSE ---")
+            print(response)
+            print("--- END DEBUG RESPONSE ---\n")
+
+        # Ensure the response is lowercase
+        return response.strip().lower()
+
+    def _generate_response_stream(
+        self, context: str, behaviors: Set[str], stream_callback: Callable[[str], None]
+    ) -> str:
+        """Generate a response using the LLM and stream it to the callback."""
+        # Build the conversation history for context
+        history_text = ""
+        if self.conversation_history:  # Include all conversation history
+            # Get the last 5 messages at most (or all if less than 5)
+            recent_messages = (
+                self.conversation_history[-5:]
+                if len(self.conversation_history) > 5
+                else self.conversation_history
+            )
+            for msg in recent_messages:
+                role = "you" if msg["role"] == "user" else "ben"
+                history_text += f"{role}: {msg['content']}\n"
+
+        behavior_guidance = ""
+        if "memory_loss" in behaviors:
+            behavior_guidance += "the user seems to want to forget or disregard something. acknowledge this appropriately.\n"
+        if "memory_gain" in behaviors:
+            behavior_guidance += "the user mentioned something important. acknowledge the importance of what they said.\n"
+
+        prompt = f"""you are ben, a helpful and casual ai assistant that helps users understand their projects and notes.
+you speak in lowercase only and have a laid-back style.
+
+### INSTRUCTIONS ###
+1. Only use "hey there" or "hi" in the very first message
+2. For all follow-up messages, respond directly without any greeting phrases
+3. Keep responses friendly, casual, and concise
+4. Don't mention "memory", "logs", or "entries" - incorporate information naturally
+5. All responses must be in lowercase only
+{behavior_guidance}
+
+conversation history:
+{history_text}
+
+context information:
+{context}
+
+respond to the user's most recent message in a conversational way that continues the existing conversation. 
+be helpful and informative.
+"""
+
+        # Print prompt for debugging if enabled
+        if self.debug:
+            print("\n--- DEBUG: PROMPT SENT TO MODEL ---")
+            print(prompt)
+            print("--- END DEBUG PROMPT ---\n")
+
+        # Use the streaming version of generate
+        response = self.llm._generate_stream(prompt, callback=stream_callback)
 
         # Print response for debugging if enabled
         if self.debug:

@@ -113,6 +113,8 @@ class IntentRecognizer:
                 "lookup",
                 "check",
                 "find out",
+                "figure out",
+                "remind me",
             ],
             IntentType.MEMORY_GAIN: [
                 "important",

@@ -3,6 +3,10 @@ from notion_assistant.memory.processor import LogEntryProcessor
 from notion_assistant.memory.manager import MemoryManager
 from notion_assistant.memory.insights import InsightGenerator
 from notion_assistant.memory.conversation import ConversationManager
+import sys
+import time
+import threading
+from typing import Optional, Callable
 
 
 def rebuild_database():
@@ -148,14 +152,46 @@ def chat_with_ben():
             print("\nending chat...")
             break
 
-        response = conversation.chat(user_input)
-        print(f"\nben: {response}")
+        try:
+            # Process the message without streaming
+            print("\nben is thinking...")
+            full_response = conversation.chat(user_input, stream_callback=None)
+
+            # Print the complete response
+            print(f"\nben: {full_response.lower()}")
+
+            # Extract debug info if present
+            if debug_mode and "\n\n[behaviors:" in full_response:
+                response_parts = full_response.split("\n\n[behaviors:")
+                debug_info = "\n\n[behaviors:" + response_parts[1]
+                print(debug_info)
+
+        except Exception as e:
+            print(f"\nError: {str(e)}")
+
+
+def display_thinking_animation(should_continue: Callable[[], bool]):
+    """Display a thinking animation while waiting for a response."""
+    animation = [".", "..", "..."]
+    i = 0
+    sys.stdout.write("\nben is thinking")
+    sys.stdout.flush()
+
+    while should_continue():
+        sys.stdout.write("\rben is thinking" + animation[i % len(animation)])
+        sys.stdout.flush()
+        i += 1
+        time.sleep(0.3)
+
+    # Clear the thinking line when done - make the clear string longer
+    sys.stdout.write("\r" + " " * 30 + "\r")  # Increased from 20 to 30 spaces
+    sys.stdout.flush()
 
 
 def main():
     try:
         while True:
-            print("\nhi, i'm ben\n---")
+            print("\nhi, i'm ben!\n---")
             print("1. rebuild database from notion")
             print("2. search existing database")
             print("3. generate new insights")
